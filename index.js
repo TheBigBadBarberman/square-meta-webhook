@@ -128,7 +128,7 @@ if (details) {
   const { customer, value } = details;
   await sendToMeta({ customer, value });
 }
-      console.log(`Sent Purchase event to Meta for booking ${bookingId}, value $${value}`);
+    console.log(`Sent Purchase event to Meta`);
     }
 
     // Always respond 200 quickly so Square doesn't retry
