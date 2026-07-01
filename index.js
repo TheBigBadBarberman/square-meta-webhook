@@ -41,22 +41,16 @@ function sha256(value) {
 }
 
 // --- Step 3: Look up full booking + customer + price details from Square ---
-async function getBookingDetails(bookingId) {
-  const bookingRes = await fetch(`https://connect.squareup.com/v2/bookings/${bookingId}`, {
-    headers: {
-      "Square-Version": SQUARE_API_VERSION,
-      "Authorization": `Bearer ${SQUARE_ACCESS_TOKEN}`,
-    },
-  });
-  const bookingData = await bookingRes.json();
-  const booking = bookingData.booking;
+async function getBookingDetails(event) {
+  const booking = event.data.object.booking;
+  const customerId = booking.customer_id;
 
-  if (!booking || !booking.customer_id) {
-    console.log("No customer ID found on booking - skipping (likely a test event)");
+  if (!customerId) {
+    console.log("No customer ID found - skipping");
     return null;
   }
 
-  const customerRes = await fetch(`https://connect.squareup.com/v2/customers/${booking.customer_id}`, {
+  const customerRes = await fetch(`https://connect.squareup.com/v2/customers/${customerId}`, {
     headers: {
       "Square-Version": SQUARE_API_VERSION,
       "Authorization": `Bearer ${SQUARE_ACCESS_TOKEN}`,
@@ -65,7 +59,6 @@ async function getBookingDetails(bookingId) {
   const customerData = await customerRes.json();
   const customer = customerData.customer;
 
-  // Get price from the booked service variation (catalog lookup)
   let value = 0;
   const variationId = booking.appointment_segments?.[0]?.service_variation_id;
   if (variationId) {
@@ -77,7 +70,7 @@ async function getBookingDetails(bookingId) {
     });
     const catalogData = await catalogRes.json();
     const priceMoney = catalogData.object?.item_variation_data?.price_money;
-    if (priceMoney) value = priceMoney.amount / 100; // cents -> dollars
+    if (priceMoney) value = priceMoney.amount / 100;
   }
 
   return { booking, customer, value };
@@ -130,7 +123,7 @@ app.post("/square-webhook", async (req, res) => {
     console.log("Received event type:", event.type);
 if (event.type === "booking.created") {
       const bookingId = event.data.id;
-      const details = await getBookingDetails(bookingId);
+      const details = await getBookingDetails(event);
 if (details) {
   const { customer, value } = details;
   await sendToMeta({ customer, value });
