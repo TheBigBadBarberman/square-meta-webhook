@@ -127,7 +127,8 @@ app.post("/square-webhook", async (req, res) => {
 
     const event = req.body;
 
-    if (event.type === "booking.created") {
+    console.log("Received event type:", event.type);
+if (event.type === "booking.created") {
       const bookingId = event.data.id;
       const details = await getBookingDetails(bookingId);
 if (details) {
