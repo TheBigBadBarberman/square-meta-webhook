@@ -129,8 +129,10 @@ app.post("/square-webhook", async (req, res) => {
 
     if (event.type === "booking.created") {
       const bookingId = event.data.id;
-      const { customer, value } = await getBookingDetails(bookingId);
-      await sendToMeta({ customer, value });
+      const details = await getBookingDetails(bookingId);
+if (details) {
+  await sendToMeta({ customer: details.customer, value: details.value });
+}
       console.log(`Sent Purchase event to Meta for booking ${bookingId}, value $${value}`);
     }
 
