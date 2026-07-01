@@ -51,6 +51,11 @@ async function getBookingDetails(bookingId) {
   const bookingData = await bookingRes.json();
   const booking = bookingData.booking;
 
+  if (!booking || !booking.customer_id) {
+    console.log("No customer ID found on booking - skipping (likely a test event)");
+    return null;
+  }
+
   const customerRes = await fetch(`https://connect.squareup.com/v2/customers/${booking.customer_id}`, {
     headers: {
       "Square-Version": SQUARE_API_VERSION,
