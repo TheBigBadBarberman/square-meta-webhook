@@ -1,7 +1,5 @@
 // Square Booking -> Meta Conversions API bridge
-// Listens for Square's "booking.created" webhook, fetches customer + price
-// details, then sends a server-side "Purchase" event to Meta so it shows
-// up as a tracked conversion from your ad campaigns.
+// Now with fbclid pass-through for precise ad attribution
 
 const express = require("express");
 const crypto = require("crypto");
@@ -9,22 +7,20 @@ const fetch = require("node-fetch");
 
 const app = express();
 
-// IMPORTANT: Square webhook signature validation needs the RAW body,
-// so we capture it before JSON parsing.
 app.use(express.json({
   verify: (req, res, buf) => { req.rawBody = buf; }
 }));
 
 const {
-  SQUARE_ACCESS_TOKEN,        // From Square Developer Dashboard
-  SQUARE_WEBHOOK_SIGNATURE_KEY, // From Square Developer Dashboard > Webhooks
+  SQUARE_ACCESS_TOKEN,
+  SQUARE_WEBHOOK_SIGNATURE_KEY,
   SQUARE_API_VERSION = "2025-10-16",
-  META_PIXEL_ID,               // Your existing Pixel ID
-  META_ACCESS_TOKEN,           // From Meta Events Manager > Conversions API
+  META_PIXEL_ID,
+  META_ACCESS_TOKEN,
   PORT = 3000,
 } = process.env;
 
-// --- Step 1: Verify the webhook really came from Square ---
+// --- Verify webhook came from Square ---
 function isValidSquareSignature(req) {
   const signature = req.headers["x-square-hmacsha256-signature"];
   const notificationUrl = `https://${req.headers.host}${req.originalUrl}`;
@@ -34,13 +30,13 @@ function isValidSquareSignature(req) {
   return signature === expected;
 }
 
-// --- Step 2: Hash customer info for Meta (required, never send raw PII) ---
+// --- Hash customer PII for Meta ---
 function sha256(value) {
   if (!value) return undefined;
   return crypto.createHash("sha256").update(value.trim().toLowerCase()).digest("hex");
 }
 
-// --- Step 3: Look up full booking + customer + price details from Square ---
+// --- Get booking details from Square ---
 async function getBookingDetails(event) {
   const booking = event.data.object.booking;
   const customerId = booking.customer_id;
@@ -76,19 +72,30 @@ async function getBookingDetails(event) {
   return { booking, customer, value };
 }
 
-// --- Step 4: Send the event to Meta Conversions API ---
-async function sendToMeta({ customer, value, eventSourceUrl }) {
+// --- Send Purchase event to Meta ---
+async function sendToMeta({ customer, value, fbclid }) {
+  const userData = {
+    em: [sha256(customer.email_address)].filter(Boolean),
+    ph: [sha256(customer.phone_number)].filter(Boolean),
+  };
+
+  // If we have fbclid, include it for precise attribution
+  // fbc format: fb.1.{timestamp}.{fbclid}
+  if (fbclid) {
+    userData.fbc = `fb.1.${Date.now()}.${fbclid}`;
+    console.log("fbclid found - precise attribution enabled");
+  } else {
+    console.log("No fbclid - falling back to email/phone matching");
+  }
+
   const eventData = {
     data: [
       {
         event_name: "Purchase",
         event_time: Math.floor(Date.now() / 1000),
-        action_source: "system_generated", // server-triggered, not a browser pageview
-        event_source_url: eventSourceUrl || "https://barberman.com.au",
-        user_data: {
-          em: [sha256(customer.email_address)].filter(Boolean),
-          ph: [sha256(customer.phone_number)].filter(Boolean),
-        },
+        action_source: "system_generated",
+        event_source_url: "https://barberman.com.au",
+        user_data: userData,
         custom_data: {
           currency: "AUD",
           value: value,
@@ -110,32 +117,37 @@ async function sendToMeta({ customer, value, eventSourceUrl }) {
   return result;
 }
 
-// --- The webhook endpoint Square will call ---
+// --- Webhook endpoint ---
 app.post("/square-webhook", async (req, res) => {
   try {
     if (!isValidSquareSignature(req)) {
-      console.warn("Invalid Square signature - rejecting request");
+      console.warn("Invalid Square signature - rejecting");
       return res.status(403).send("Invalid signature");
     }
 
     const event = req.body;
-
     console.log("Received event type:", event.type);
-if (event.type === "booking.created") {
-      const bookingId = event.data.id;
+
+    if (event.type === "booking.created") {
       const details = await getBookingDetails(event);
-if (details) {
-  const { customer, value } = details;
-  await sendToMeta({ customer, value });
-}
-    console.log(`Sent Purchase event to Meta`);
+
+      if (details) {
+        const { customer, value } = details;
+
+        // Try to extract fbclid from booking source URL if Square passes it through
+        const bookingSource = event.data.object.booking?.source?.name || "";
+        const fbclidMatch = bookingSource.match(/fbclid=([^&]+)/);
+        const fbclid = fbclidMatch ? fbclidMatch[1] : null;
+
+        await sendToMeta({ customer, value, fbclid });
+        console.log("Sent Purchase event to Meta");
+      }
     }
 
-    // Always respond 200 quickly so Square doesn't retry
     res.status(200).send("OK");
   } catch (err) {
     console.error("Webhook error:", err);
-    res.status(200).send("OK"); // still 200 so Square doesn't keep retrying on our bug
+    res.status(200).send("OK");
   }
 });
 
